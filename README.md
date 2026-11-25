@@ -1,6 +1,5 @@
 # Summative — Regression Analysis
 
-**Use case:** Predict a university student's GPA from mental health and lifestyle indicators so that academic advisors can flag at-risk students early.
 
 ## Repository structure
 
@@ -18,53 +17,8 @@ summative/
     └── student_gpa_app/          # Task 3 — Flutter mobile app
 ```
 
-## Task 1 — Notebook
-
-```bash
-cd summative
-uv sync
-uv run jupyter notebook linear_regression/multivariate.ipynb
 ```
-
-Run all cells top-to-bottom. The notebook:
-- Generates the 1 200-row student dataset
-- Plots a correlation heatmap and histograms
-- Trains SGDRegressor, LinearRegression, DecisionTree, RandomForest
-- Plots the SGD loss curve (train & test MSE per epoch)
-- Plots scatter before/after regression line
-- Saves the best model to `API/best_model.pkl`
-
-## Task 2 — API
-
-### Run locally
-
-```bash
 cd summative/API
 uv run uvicorn prediction:app --reload
 # Swagger UI → http://localhost:8000/docs
 ```
-
-### Deploy on Render
-
-1. Push this repo to GitHub.
-2. Create a new **Web Service** on Render.
-3. Set **Root Directory** to `summative/API`.
-4. Build command: `pip install -r requirements.txt`
-5. Start command: `uvicorn prediction:app --host 0.0.0.0 --port $PORT`
-6. After deploy, Swagger UI is at `https://<your-service>.onrender.com/docs`.
-
-Update the `allow_origins` list in `prediction.py` with your actual Render URL before deploying.
-
-## Task 3 — Flutter App
-
-```bash
-cd summative/FlutterApp/student_gpa_app
-flutter pub get
-flutter run          # select Android/iOS emulator
-```
-
-Update `_apiUrl` in `lib/main.dart` to your deployed Render URL.
-
-## CORS policy
-
-The API allows requests from the Render production URL and `localhost:8080` (Flutter web debug). The wildcard `*` is not used for origins. Mobile Flutter apps are not browsers and bypass CORS entirely — the policy only governs web clients.
