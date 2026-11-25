@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -5,338 +6,258 @@ import 'package:http/http.dart' as http;
 
 import 'api_config.dart';
 
-void main() {
-  runApp(const NutriWiseApp());
-}
+void main() => runApp(const NutriWiseApp());
 
 class NutriWiseApp extends StatelessWidget {
   const NutriWiseApp({super.key});
 
   @override
   Widget build(BuildContext context) {
-    const green = Color(0xFF237A57);
     return MaterialApp(
       title: 'NutriWise',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(seedColor: green, brightness: Brightness.light),
-        scaffoldBackgroundColor: const Color(0xFFF6F8F5),
-        inputDecorationTheme: InputDecorationTheme(
-          filled: true,
-          fillColor: Colors.white,
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(14),
-            borderSide: const BorderSide(color: Color(0xFFE0E7E1)),
-          ),
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF237A57)),
+        inputDecorationTheme: const InputDecorationTheme(
+          border: OutlineInputBorder(),
+          helperMaxLines: 4,
         ),
       ),
-      home: const NutritionFormPage(),
+      home: const PredictionPage(),
     );
   }
 }
 
-class NutritionFormPage extends StatefulWidget {
-  const NutritionFormPage({super.key});
+/// Describes one model input and checks what the user typed.
+class InputField {
+  InputField.number(this.name, this.label, this.helper,
+      {required this.min, required this.max, this.wholeNumber = false})
+      : options = const [];
 
-  @override
-  State<NutritionFormPage> createState() => _NutritionFormPageState();
+  InputField.text(this.name, this.label, this.options)
+      : helper = 'Type one of: ${options.join(', ')}',
+        min = 0,
+        max = 0,
+        wholeNumber = false;
+
+  final String name; // The field name the API expects.
+  final String label;
+  final String helper;
+  final num min;
+  final num max;
+  final bool wholeNumber;
+  final List<String> options;
+  final controller = TextEditingController();
+
+  bool get isNumber => options.isEmpty;
+
+  /// Returns the value to send, or throws a FormatException with a message.
+  Object read() {
+    final text = controller.text.trim();
+    if (text.isEmpty) throw FormatException('$label is missing.');
+
+    if (!isNumber) {
+      // Ignore capitals, and treat spaces like underscores.
+      final typed = text.toLowerCase().replaceAll(' ', '_');
+      for (final option in options) {
+        if (option.toLowerCase() == typed) return option;
+      }
+      throw FormatException('$label: "$text" is not one of the listed values.');
+    }
+
+    final num? value = wholeNumber ? int.tryParse(text) : double.tryParse(text);
+    if (value == null || !value.isFinite) {
+      throw FormatException(
+          '$label must be a ${wholeNumber ? 'whole number' : 'number'}.');
+    }
+    if (value < min || value > max) {
+      throw FormatException('$label must be between $min and $max.');
+    }
+    return value;
+  }
 }
 
-class _NutritionFormPageState extends State<NutritionFormPage> {
-  final _formKey = GlobalKey<FormState>();
-  final _age = TextEditingController(text: '25');
-  final _household = TextEditingController(text: '4');
-  final _incomeRatio = TextEditingController(text: '2.5');
-  final _height = TextEditingController(text: '170');
-  final _weight = TextEditingController(text: '70');
-  final _bmi = TextEditingController(text: '24.2');
-  final _waist = TextEditingController(text: '82');
+class PredictionPage extends StatefulWidget {
+  const PredictionPage({super.key});
 
-  int? _gender = 1;
-  int? _race = 3;
-  int? _education = 4;
+  @override
+  State<PredictionPage> createState() => _PredictionPageState();
+}
+
+class _PredictionPageState extends State<PredictionPage> {
+  // One text field per model input, with the same limits as the API.
+  final _fields = [
+    InputField.number('HHsizemembers', 'Household size',
+        'Number of people, 1 to 30', min: 1, max: 30, wholeNumber: true),
+    InputField.number('LandCultivated', 'Land cultivated',
+        'Hectares, 0 to 50', min: 0, max: 50),
+    InputField.number('LivestockHoldings', 'Livestock holdings',
+        'Tropical livestock units, 0 to 50', min: 0, max: 50),
+    InputField.number('NrofMonthsFoodInsecure', 'Food-insecure months',
+        'Months per year, 0 to 12', min: 0, max: 12, wholeNumber: true),
+    InputField.number('NrofMonthsWildFoodCons', 'Months eating wild foods',
+        'Months per year, 0 to 12', min: 0, max: 12, wholeNumber: true),
+    InputField.number('Gender_FemaleControl', 'Share controlled by women',
+        'From 0 (none) to 1 (all), such as 0.3', min: 0, max: 1),
+    InputField.text('Country', 'Country', const [
+      'Burkina_Faso', 'Burundi', 'DRC', 'Ethiopia', 'Ghana', 'Kenya',
+      'Malawi', 'Mali', 'Tanzania', 'Uganda', 'Zambia',
+    ]),
+    InputField.text('HouseholdType', 'Household type', const [
+      'couple', 'couple_man_works_away', 'couple_woman_works_away',
+      'man_single', 'woman_single', 'single', 'together', 'polygamous',
+      'workaway', 'nonparenthead', 'other',
+    ]),
+    InputField.text('Head_EducationLevel', 'Education of household head', const [
+      'primary', 'secondary', 'postsecondary', 'no_school', 'illiterate',
+      'literate', 'adult_education', 'religious_school', 'islamic_school',
+      'informal',
+    ]),
+    InputField.text('HFIAS_status', 'Food insecurity (FI) status', const [
+      'FoodSecure', 'MildlyFI', 'ModeratelyFI', 'SeverelyFI',
+    ]),
+  ];
+
   bool _loading = false;
-  String? _error;
-  double? _prediction;
-  String? _modelName;
+  bool _isError = false;
+  String _message = 'Fill in all the fields, then press Predict.';
 
   @override
   void dispose() {
-    for (final controller in [
-      _age, _household, _incomeRatio, _height, _weight, _bmi, _waist,
-    ]) {
-      controller.dispose();
+    for (final field in _fields) {
+      field.controller.dispose();
     }
     super.dispose();
   }
 
-  String? _numberValidator(String? value, String label, double min, double max) {
-    final parsed = double.tryParse(value?.trim() ?? '');
-    if (parsed == null) return 'Enter a valid $label.';
-    if (parsed < min || parsed > max) {
-      return '$label must be between $min and $max.';
-    }
-    return null;
+  void _show(String message, {bool isError = false, bool loading = false}) {
+    if (!mounted) return;
+    setState(() {
+      _message = message;
+      _isError = isError;
+      _loading = loading;
+    });
   }
 
   Future<void> _predict() async {
     FocusScope.of(context).unfocus();
-    setState(() {
-      _error = null;
-      _prediction = null;
-    });
 
-    if (!_formKey.currentState!.validate()) return;
-    if (_gender == null || _race == null || _education == null) {
-      setState(() => _error = 'Please select all demographic categories.');
+    // 1. Check every field before calling the API.
+    final body = <String, Object>{};
+    final errors = <String>[];
+    for (final field in _fields) {
+      try {
+        body[field.name] = field.read();
+      } on FormatException catch (e) {
+        errors.add(e.message);
+      }
+    }
+    if (errors.isNotEmpty) {
+      _show(errors.join('\n'), isError: true);
       return;
     }
 
-    final baseUrl = ApiConfig.baseUrl.trim().replaceAll(RegExp(r'/$'), '');
-    if (baseUrl.contains('YOUR-RENDER-SERVICE')) {
-      setState(() => _error = 'Add your actual Render URL in lib/api_config.dart first.');
-      return;
-    }
-
-    final payload = {
-      'RIDAGEYR': double.parse(_age.text),
-      'DMDHHSIZ': double.parse(_household.text),
-      'INDFMPIR': double.parse(_incomeRatio.text),
-      'BMXHT': double.parse(_height.text),
-      'BMXWT': double.parse(_weight.text),
-      'BMXBMI': double.parse(_bmi.text),
-      'BMXWAIST': double.parse(_waist.text),
-      'RIAGENDR': _gender,
-      'RIDRETH3': _race,
-      'DMDEDUC2': _education,
-    };
-
-    setState(() => _loading = true);
+    // 2. Send the values to the API and show the result.
+    _show('Predicting... the server can take a minute to wake up.', loading: true);
     try {
+      final baseUrl = ApiConfig.baseUrl.replaceAll(RegExp(r'/+$'), '');
       final response = await http
           .post(
             Uri.parse('$baseUrl/predict'),
-            headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
-            body: jsonEncode(payload),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode(body),
           )
-          .timeout(const Duration(seconds: 45));
+          .timeout(const Duration(seconds: 90));
 
-      final decoded = jsonDecode(response.body);
-      if (response.statusCode >= 200 && response.statusCode < 300) {
-        setState(() {
-          _prediction = (decoded['predicted_day1_kcal'] as num).toDouble();
-          _modelName = decoded['model']?.toString();
-        });
+      if (response.statusCode == 200) {
+        final value =
+            jsonDecode(response.body)['predicted_kcal_per_adult_per_day'] as num;
+        _show('Predicted food availability:\n'
+            '${value.toStringAsFixed(0)} kcal per adult per day');
+      } else if (response.statusCode == 422) {
+        _show(_readableApiError(response.body), isError: true);
       } else {
-        final detail = decoded is Map ? decoded['detail'] : null;
-        setState(() => _error = 'API error (${response.statusCode}): ${detail ?? response.body}');
+        _show('The server had a problem (code ${response.statusCode}). '
+            'Please try again.', isError: true);
       }
-    } catch (e) {
-      setState(() => _error = 'Could not reach NutriWise API. Check your Render URL and internet connection. Details: $e');
-    } finally {
-      if (mounted) setState(() => _loading = false);
+    } on TimeoutException {
+      _show('The server took too long to answer. Please try again.', isError: true);
+    } on http.ClientException {
+      _show('Could not reach the server. Check your internet connection.',
+          isError: true);
+    } catch (_) {
+      _show('Something went wrong. Please try again.', isError: true);
     }
   }
 
-  Widget _field(
-    String label,
-    TextEditingController controller,
-    String helper,
-    double min,
-    double max,
-  ) {
-    return TextFormField(
-      controller: controller,
-      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-      decoration: InputDecoration(labelText: label, helperText: helper),
-      validator: (value) => _numberValidator(value, label, min, max),
-    );
-  }
-
-  Widget _dropdown<T>({
-    required String label,
-    required T value,
-    required List<DropdownMenuItem<T>> items,
-    required ValueChanged<T?> onChanged,
-    required String helper,
-  }) {
-    return DropdownButtonFormField<T>(
-      initialValue: value,
-      decoration: InputDecoration(labelText: label, helperText: helper),
-      items: items,
-      onChanged: onChanged,
-    );
+  /// Turns the API's validation error into sentences a person can read.
+  String _readableApiError(String responseBody) {
+    final detail = jsonDecode(responseBody)['detail'];
+    if (detail is! List) return 'The server rejected the values.';
+    return detail.map((item) {
+      final name = (item['loc'] as List).last;
+      final matches = _fields.where((f) => f.name == name);
+      final label = matches.isEmpty ? name : matches.first.label;
+      return '$label: ${item['msg']}';
+    }).join('\n');
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final colors = Theme.of(context).colorScheme;
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('NutriWise'),
-        centerTitle: false,
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 16),
-            child: Icon(Icons.eco_outlined, color: theme.colorScheme.primary),
-          ),
-        ],
-      ),
+      appBar: AppBar(title: const Text('NutriWise')),
       body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(18, 8, 18, 28),
-          children: [
-            Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: const Color(0xFFE6F2E9),
-                borderRadius: BorderRadius.circular(22),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('NUTRITION INSIGHTS', style: theme.textTheme.labelMedium?.copyWith(
-                    color: const Color(0xFF237A57), letterSpacing: 1.2, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 8),
-                  Text('Understand your nutrition data.',
-                    style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 6),
-                  Text('Enter the requested details to estimate reported Day 1 calorie intake.',
-                    style: theme.textTheme.bodyMedium),
-                ],
-              ),
-            ),
-            const SizedBox(height: 22),
-            Text('Your information', style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold)),
-            const SizedBox(height: 12),
-            Form(
-              key: _formKey,
-              child: Column(
-                children: [
-                  _field('Age', _age, 'Years (0–120)', 0, 120),
-                  const SizedBox(height: 12),
-                  _field('Household size', _household, 'Number of people (1–20)', 1, 20),
-                  const SizedBox(height: 12),
-                  _field('Family income-to-poverty ratio', _incomeRatio, 'Survey ratio (0–5)', 0, 5),
-                  const SizedBox(height: 12),
-                  _field('Height', _height, 'Centimetres (50–250)', 50, 250),
-                  const SizedBox(height: 12),
-                  _field('Weight', _weight, 'Kilograms (10–350)', 10, 350),
-                  const SizedBox(height: 12),
-                  _field('BMI', _bmi, 'Body mass index (5–100)', 5, 100),
-                  const SizedBox(height: 12),
-                  _field('Waist circumference', _waist, 'Centimetres (30–200)', 30, 200),
-                  const SizedBox(height: 12),
-                  _dropdown<int>(
-                    label: 'NHANES gender code',
-                    value: _gender!,
-                    helper: '1 = Male, 2 = Female (survey coding)',
-                    items: const [
-                      DropdownMenuItem(value: 1, child: Text('1 — Male')),
-                      DropdownMenuItem(value: 2, child: Text('2 — Female')),
-                    ],
-                    onChanged: (v) => setState(() => _gender = v),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text('Predict the food available to a farm household.'),
+              const SizedBox(height: 16),
+              for (final field in _fields) ...[
+                TextField(
+                  key: Key(field.name),
+                  controller: field.controller,
+                  keyboardType: field.isNumber
+                      ? const TextInputType.numberWithOptions(decimal: true)
+                      : TextInputType.text,
+                  autocorrect: false,
+                  decoration: InputDecoration(
+                    labelText: field.label,
+                    helperText: field.helper,
                   ),
-                  const SizedBox(height: 12),
-                  _dropdown<int>(
-                    label: 'NHANES race / ethnicity code',
-                    value: _race!,
-                    helper: 'Select the dataset category code',
-                    items: const [
-                      DropdownMenuItem(value: 1, child: Text('1 — Mexican American')),
-                      DropdownMenuItem(value: 2, child: Text('2 — Other Hispanic')),
-                      DropdownMenuItem(value: 3, child: Text('3 — White')),
-                      DropdownMenuItem(value: 4, child: Text('4 — Black')),
-                      DropdownMenuItem(value: 6, child: Text('6 — Asian')),
-                      DropdownMenuItem(value: 7, child: Text('7 — Other / multiracial')),
-                    ],
-                    onChanged: (v) => setState(() => _race = v),
-                  ),
-                  const SizedBox(height: 12),
-                  _dropdown<int>(
-                    label: 'NHANES education code',
-                    value: _education!,
-                    helper: 'Survey education category',
-                    items: const [
-                      DropdownMenuItem(value: 1, child: Text('1 — Less than 9th grade')),
-                      DropdownMenuItem(value: 2, child: Text('2 — 9th–11th grade')),
-                      DropdownMenuItem(value: 3, child: Text('3 — High school graduate / GED')),
-                      DropdownMenuItem(value: 4, child: Text('4 — Some college / AA degree')),
-                      DropdownMenuItem(value: 5, child: Text('5 — College graduate or above')),
-                    ],
-                    onChanged: (v) => setState(() => _education = v),
-                  ),
-                ],
+                ),
+                const SizedBox(height: 16),
+              ],
+              FilledButton(
+                onPressed: _loading ? null : _predict,
+                child: const Text('Predict'),
               ),
-            ),
-            const SizedBox(height: 20),
-            FilledButton.icon(
-              onPressed: _loading ? null : _predict,
-              icon: _loading
-                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.insights),
-              label: Text(_loading ? 'Getting estimate…' : 'Get nutrition insight'),
-              style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(54)),
-            ),
-            if (_error != null) ...[
-              const SizedBox(height: 14),
-              _MessageCard(color: const Color(0xFFFFE9E7), icon: Icons.error_outline, text: _error!),
-            ],
-            if (_prediction != null) ...[
-              const SizedBox(height: 18),
+              const SizedBox(height: 16),
+              // Display area: shows the prediction or the error message.
               Container(
-                padding: const EdgeInsets.all(20),
+                padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFE5F3EA),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: const Color(0xFFB9D9C4)),
+                  color: _isError
+                      ? colors.errorContainer
+                      : colors.secondaryContainer,
+                  borderRadius: BorderRadius.circular(8),
                 ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('ESTIMATED DAY 1 INTAKE', style: TextStyle(
-                      fontWeight: FontWeight.bold, letterSpacing: 1, color: Color(0xFF237A57))),
-                    const SizedBox(height: 8),
-                    Text('${_prediction!.toStringAsFixed(0)} kcal',
-                      style: theme.textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold)),
-                    if (_modelName != null) Text('Model: $_modelName', style: theme.textTheme.bodySmall),
-                  ],
+                child: Text(
+                  _message,
+                  key: const Key('display'),
+                  style: TextStyle(
+                    fontSize: 16,
+                    color: _isError
+                        ? colors.onErrorContainer
+                        : colors.onSecondaryContainer,
+                  ),
                 ),
               ),
             ],
-            const SizedBox(height: 18),
-            const _MessageCard(
-              color: Color(0xFFFFF3D9),
-              icon: Icons.info_outline,
-              text: 'Important: this model estimates calories reported during one 24-hour dietary recall. It is not a recommended calorie target, medical advice, or a measure of energy expenditure. The model was trained on US NHANES data and has not been validated for Rwanda.',
-            ),
-          ],
+          ),
         ),
-      ),
-    );
-  }
-}
-
-class _MessageCard extends StatelessWidget {
-  const _MessageCard({required this.color, required this.icon, required this.text});
-  final Color color;
-  final IconData icon;
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(14)),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, size: 20),
-          const SizedBox(width: 10),
-          Expanded(child: Text(text)),
-        ],
       ),
     );
   }
