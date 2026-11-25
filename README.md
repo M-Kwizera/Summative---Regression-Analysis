@@ -17,7 +17,7 @@ https://nutriwise-africa-api.onrender.com/docs
 The free Render service sleeps when idle, so the first request can take up to a minute.
 
 ## Video demo
-PASTE YOUR YOUTUBE LINK HERE
+https://www.youtube.com/watch?v=nIzCqlpHqGg
 
 ## Run the mobile app
 You need [Flutter](https://docs.flutter.dev/get-started/install), Git, and an Android emulator or phone. The app calls the public API, so no local server is needed.
