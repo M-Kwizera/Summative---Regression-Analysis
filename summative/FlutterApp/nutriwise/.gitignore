@@ -1,0 +1,124 @@
+# .dart_tool/
+# .packages
+# .pub/
+# build/
+# .flutter-plugins
+# .flutter-plugins-dependencies
+# .idea/
+# .vscode/
+
+
+# =====================================
+# FLUTTER / DART
+# =====================================
+
+.dart_tool/
+.packages
+.pub-cache/
+.pub/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+.metadata
+
+# =====================================
+# ENVIRONMENT VARIABLES & API SECRETS
+# =====================================
+
+.env
+.env.*
+!.env.example
+*.env
+
+# API keys and secret configuration
+secrets/
+secrets.*
+*secret*
+*secrets*
+*api_key*
+*apikey*
+*api-key*
+*credentials*
+*private_key*
+*private-key*
+
+# =====================================
+# FIREBASE CONFIDENTIAL FILES
+# =====================================
+
+firebase-adminsdk*.json
+service-account*.json
+google-services.json
+GoogleService-Info.plist
+
+# =====================================
+# ANDROID
+# =====================================
+
+android/local.properties
+android/key.properties
+android/*.jks
+android/*.keystore
+android/app/*.jks
+android/app/*.keystore
+android/.gradle/
+android/captures/
+
+# =====================================
+# IOS
+# =====================================
+
+ios/Flutter/Generated.xcconfig
+ios/Flutter/flutter_export_environment.sh
+ios/Runner/GeneratedPluginRegistrant.*
+ios/Pods/
+ios/.symlinks/
+ios/Runner.xcworkspace/
+ios/Runner/GoogleService-Info.plist
+
+# =====================================
+# EDITORS / IDEs
+# =====================================
+
+.idea/
+.vscode/
+*.iml
+*.swp
+*.swo
+.DS_Store
+
+# =====================================
+# LOGS AND TEMPORARY FILES
+# =====================================
+
+*.log
+*.tmp
+*.bak
+*.temp
+*.old
+
+# =====================================
+# TESTING / COVERAGE
+# =====================================
+
+coverage/
+test-results/
+
+# =====================================
+# CERTIFICATES AND SIGNING KEYS
+# =====================================
+
+*.pem
+*.p12
+*.pfx
+*.key
+*.crt
+*.cer
+
+# =====================================
+# BACKUPS
+# =====================================
+
+*.backup
+*.bak
+*.orig
