@@ -1,12 +1,12 @@
 {
-  "RIDAGEYR": 25,
-  "DMDHHSIZ": 4,
-  "INDFMPIR": 2.5,
-  "BMXHT": 170,
-  "BMXWT": 70,
-  "BMXBMI": 24.2,
-  "BMXWAIST": 82,
-  "RIAGENDR": 1,
-  "RIDRETH3": 3,
-  "DMDEDUC2": 4
+  "HHsizemembers": 6,
+  "LandCultivated": 2.0,
+  "LivestockHoldings": 1.5,
+  "NrofMonthsFoodInsecure": 2,
+  "NrofMonthsWildFoodCons": 0,
+  "Gender_FemaleControl": 0.3,
+  "Country": "Kenya",
+  "HouseholdType": "couple",
+  "Head_EducationLevel": "primary",
+  "HFIAS_status": "ModeratelyFI"
 }

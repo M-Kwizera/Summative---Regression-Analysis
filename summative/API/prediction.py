@@ -1,205 +1,88 @@
-"""NutriWise FastAPI service for estimating NHANES Day 1 reported calorie intake."""
-from __future__ import annotations
-
-import os
-from pathlib import Path
-from threading import Lock
+"""NutriWise API: predicts household food availability (kcal per adult per day)."""
 from typing import Literal
 
 import joblib
-import numpy as np
 import pandas as pd
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 
-BASE_DIR = Path(__file__).resolve().parent
-MODEL_PATH = Path(os.getenv("MODEL_PATH", BASE_DIR / "best_model.pkl"))
-TRAINING_DATA_PATH = Path(os.getenv("TRAINING_DATA_PATH", BASE_DIR / "nutriwise_dataset.csv"))
+from retrain import FEATURES, MODEL_PATH, load_and_predict, router as retrain_router
 
-NUMERIC_FEATURES = [
-    "RIDAGEYR", "DMDHHSIZ", "INDFMPIR", "BMXHT", "BMXWT", "BMXBMI", "BMXWAIST"
-]
-CATEGORICAL_FEATURES = ["RIAGENDR", "RIDRETH3", "DMDEDUC2"]
-FEATURES = NUMERIC_FEATURES + CATEGORICAL_FEATURES
-TARGET = "DR1TKCAL"
+app = FastAPI(title="NutriWise API")
 
-# Categorical codes match the NHANES coding used when training the pipeline.
-GenderCode = Literal[1, 2]
-RaceEthnicityCode = Literal[1, 2, 3, 4, 6, 7]
-EducationCode = Literal[1, 2, 3, 4, 5]
+# CORS decides which websites may call this API from a browser.
+# Allowed: our own Render site (Swagger UI) and the local Flutter web debug
+#   address (flutter run -d chrome --web-port 8080). No wildcard, so other
+#   websites cannot read our responses in a visitor's browser.
+# Methods: only GET (docs) and POST (predict, retrain), the ones we use.
+# Headers: only Content-Type, needed to send JSON and file uploads.
+# Credentials: off, because the API uses no cookies or logins.
+# The mobile app is not a browser, so CORS does not restrict it.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://nutriwise-api-tc0r.onrender.com",
+        "http://localhost:8080",
+        "http://127.0.0.1:8080",
+    ],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
+    allow_credentials=False,
+)
+
+app.include_router(retrain_router)
+
+# Load once at startup so a missing or broken model file fails immediately.
+joblib.load(MODEL_PATH)
 
 
 class PredictionInput(BaseModel):
-    """One person's input values, using the original NHANES column names."""
-    model_config = ConfigDict(extra="forbid")
+    # strict: "5" (text) is not accepted as a number. forbid: no unknown fields.
+    model_config = ConfigDict(
+        strict=True,
+        extra="forbid",
+        json_schema_extra={
+            "example": {
+                "HHsizemembers": 6, "LandCultivated": 2.0, "LivestockHoldings": 1.5,
+                "NrofMonthsFoodInsecure": 2, "NrofMonthsWildFoodCons": 0,
+                "Gender_FemaleControl": 0.3, "Country": "Kenya",
+                "HouseholdType": "couple", "Head_EducationLevel": "primary",
+                "HFIAS_status": "ModeratelyFI",
+            }
+        },
+    )
 
-    RIDAGEYR: float = Field(ge=0, le=120, description="Age in years")
-    DMDHHSIZ: float = Field(ge=1, le=20, description="Household size")
-    INDFMPIR: float = Field(ge=0, le=5, description="Family income-to-poverty ratio")
-    BMXHT: float = Field(ge=50, le=250, description="Standing height in centimetres")
-    BMXWT: float = Field(ge=10, le=350, description="Weight in kilograms")
-    BMXBMI: float = Field(ge=5, le=100, description="Body mass index")
-    BMXWAIST: float = Field(ge=30, le=200, description="Waist circumference in centimetres")
-    RIAGENDR: GenderCode = Field(description="NHANES gender code: 1 or 2")
-    RIDRETH3: RaceEthnicityCode = Field(description="NHANES race/ethnicity code: 1, 2, 3, 4, 6 or 7")
-    DMDEDUC2: EducationCode = Field(description="NHANES education code: 1 to 5")
+    HHsizemembers: int = Field(ge=1, le=30, description="People in the household")
+    LandCultivated: float = Field(ge=0, le=50, description="Land cultivated (hectares)")
+    LivestockHoldings: float = Field(ge=0, le=50, description="Livestock (tropical livestock units)")
+    NrofMonthsFoodInsecure: int = Field(ge=0, le=12, description="Food-insecure months per year")
+    NrofMonthsWildFoodCons: int = Field(ge=0, le=12, description="Months per year eating wild foods")
+    Gender_FemaleControl: float = Field(ge=0, le=1, description="Share controlled by women (0 to 1)")
+    Country: Literal[
+        "Burkina_Faso", "Burundi", "DRC", "Ethiopia", "Ghana", "Kenya",
+        "Malawi", "Mali", "Tanzania", "Uganda", "Zambia",
+    ]
+    HouseholdType: Literal[
+        "couple", "couple_man_works_away", "couple_woman_works_away", "man_single",
+        "woman_single", "single", "together", "polygamous", "workaway",
+        "nonparenthead", "other",
+    ]
+    Head_EducationLevel: Literal[
+        "primary", "secondary", "postsecondary", "no_school", "illiterate",
+        "literate", "adult_education", "religious_school", "islamic_school", "informal",
+    ]
+    HFIAS_status: Literal["FoodSecure", "MildlyFI", "ModeratelyFI", "SeverelyFI"] = Field(
+        description="Food insecurity (FI) status"
+    )
 
 
 class PredictionOutput(BaseModel):
-    predicted_day1_kcal: float
-    unit: str = "kcal"
-    interpretation: str
-    model: str
-
-
-app = FastAPI(
-    title="NutriWise API",
-    description=(
-        "Predicts Day 1 reported dietary energy intake (DR1TKCAL) from selected "
-        "NHANES demographic and body-measurement features. This is not a calorie "
-        "target, medical recommendation, or estimate of energy expenditure."
-    ),
-    version="1.0.0",
-)
-
-# Configure deployed frontend origins with ALLOWED_ORIGINS, comma-separated.
-# Example: https://your-flutter-web-app.example,https://your-frontend.example
-allowed_origins = [
-    origin.strip()
-    for origin in os.getenv(
-        "ALLOWED_ORIGINS",
-        "http://localhost:3000,http://localhost:5173,http://127.0.0.1:5173",
-    ).split(",")
-    if origin.strip()
-]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=allowed_origins,
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization"],
-)
-
-try:
-    model = joblib.load(MODEL_PATH)
-except Exception as exc:  # fail clearly on startup if deployment files are missing/corrupt
-    raise RuntimeError(f"Could not load model at {MODEL_PATH}: {exc}") from exc
-
-training_lock = Lock()
-
-
-def _prepare_frame(frame: pd.DataFrame) -> pd.DataFrame:
-    """Apply the same categorical representation used during Task 1."""
-    frame = frame[FEATURES].copy()
-    for column in CATEGORICAL_FEATURES:
-        # OneHotEncoder was trained on string category codes.
-        frame[column] = frame[column].map(
-            lambda value: str(int(value)) if pd.notna(value) else np.nan
-        )
-    for column in NUMERIC_FEATURES:
-        frame[column] = pd.to_numeric(frame[column], errors="coerce")
-        # Match the SAS special-missing cleanup in the notebook.
-        frame.loc[frame[column].abs() < 1e-70, column] = np.nan
-    return frame
-
-
-@app.get("/")
-def root():
-    return {
-        "message": "NutriWise API is running",
-        "docs": "/docs",
-        "health": "/health",
-    }
-
-
-@app.get("/health")
-def health():
-    return {"status": "ok", "model_loaded": model is not None}
+    predicted_kcal_per_adult_per_day: float
 
 
 @app.post("/predict", response_model=PredictionOutput)
 def predict(payload: PredictionInput):
-    values = payload.model_dump()
-    row = _prepare_frame(pd.DataFrame([values]))
-    try:
-        prediction = float(model.predict(row)[0])
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Prediction failed: {exc}") from exc
-
-    # The estimator is a regression model; clip impossible negative outputs.
-    prediction = max(0.0, prediction)
-    return PredictionOutput(
-        predicted_day1_kcal=round(prediction, 1),
-        interpretation=(
-            "Estimated Day 1 reported calorie intake from one 24-hour dietary recall. "
-            "It is not a recommended daily calorie target."
-        ),
-        model=type(model.named_steps["model"]).__name__,
-    )
-
-
-@app.post("/retrain")
-def retrain(file: UploadFile = File(...)):
-    """Continue SGD training with an uploaded CSV containing FEATURES + DR1TKCAL."""
-    global model
-    if not file.filename or not file.filename.lower().endswith(".csv"):
-        raise HTTPException(status_code=400, detail="Upload a .csv file.")
-
-    try:
-        uploaded = pd.read_csv(file.file)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Could not read CSV: {exc}") from exc
-
-    required_columns = FEATURES + [TARGET]
-    missing = [column for column in required_columns if column not in uploaded.columns]
-    if missing:
-        raise HTTPException(
-            status_code=422,
-            detail={"message": "CSV is missing required columns.", "missing_columns": missing},
-        )
-
-    clean = uploaded[required_columns].copy()
-    clean[TARGET] = pd.to_numeric(clean[TARGET], errors="coerce")
-    clean = clean.dropna(subset=[TARGET])
-    clean = clean[clean[TARGET] >= 0]
-    if len(clean) < 10:
-        raise HTTPException(
-            status_code=422,
-            detail="CSV must contain at least 10 rows with valid, non-negative DR1TKCAL values.",
-        )
-
-    x_new = _prepare_frame(clean)
-    y_new = clean[TARGET].astype(float)
-
-    with training_lock:
-        try:
-            candidate = joblib.load(MODEL_PATH)
-            estimator = candidate.named_steps["model"]
-            if hasattr(estimator, "partial_fit"):
-                transformed = candidate.named_steps["preprocessor"].transform(x_new)
-                estimator.partial_fit(transformed, y_new.to_numpy())
-            else:
-                # For a non-incremental estimator, refit on original + uploaded data.
-                original = pd.read_csv(TRAINING_DATA_PATH)
-                original = original[required_columns].copy()
-                combined = pd.concat([original, clean], ignore_index=True)
-                combined[TARGET] = pd.to_numeric(combined[TARGET], errors="coerce")
-                combined = combined.dropna(subset=[TARGET])
-                candidate.fit(
-                    _prepare_frame(combined), combined[TARGET].astype(float)
-                )
-
-            temporary_path = MODEL_PATH.with_suffix(".tmp.joblib")
-            joblib.dump(candidate, temporary_path)
-            temporary_path.replace(MODEL_PATH)
-            model = candidate
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"Retraining failed: {exc}") from exc
-
-    return {
-        "message": "Model retrained successfully.",
-        "rows_used": int(len(clean)),
-        "model": type(model.named_steps["model"]).__name__,
-        "note": "The updated model file is saved in the service filesystem.",
-    }
+    """Return the predicted food availability for one household."""
+    row = pd.DataFrame([payload.model_dump()])[FEATURES]
+    return PredictionOutput(predicted_kcal_per_adult_per_day=round(load_and_predict(row), 1))
